@@ -1,31 +1,9 @@
-from math import e
+import numpy as np
 import torch
-import torchvision.transforms as transforms
-import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from torch import cuda, FloatTensor, LongTensor
-from torch.utils.data import Dataset, DataLoader
 
-import datetime
-import sys
-import requests
-import io
-import os
-import random
-from time import sleep
-
-import numpy as np
-import pandas as pd
-import math
-
-import matplotlib.pyplot as plt
-
-from sklearn.preprocessing import StandardScaler 
-from sklearn.preprocessing import normalize
-from sklearn.neighbors import NearestNeighbors
-from sklearn import metrics
 
 ###
 # Large Spatial Transformer Network (STN) module
@@ -44,7 +22,7 @@ class STNkd(nn.Module):
         self.fc1 = nn.Linear(1024, 512)
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, 128)
-        self.fc4 = nn.Linear(128, k*k)
+        self.fc4 = nn.Linear(128, k * k)
         self.relu = nn.ReLU()
 
         self.bn1 = nn.BatchNorm1d(32)
@@ -73,13 +51,13 @@ class STNkd(nn.Module):
         x = F.relu(self.bn8(self.fc3(x)))
         x = self.fc4(x)
 
-        iden = Variable(torch.from_numpy(np.eye(self.k).flatten().astype(np.float32))).view(1,self.k*self.k).repeat(batchsize,1)
-        if x.is_cuda:
-            iden = iden.cuda()
-        x = x + iden
+        iden = Variable(torch.from_numpy(np.eye(self.k).flatten().astype(np.float32))).view(1, self.k * self.k).repeat(
+            batchsize, 1)
+        x = x + iden.to(device=x.device)
         x = x.view(-1, self.k, self.k)
 
         return x
+
 
 ###
 # PointNet encoder
@@ -95,10 +73,11 @@ class PointNetfeat(nn.Module):
     """
         PointNet Module
     """
-    def __init__(self, code_nfts=2048, num_points=2500, n_dim = 2, global_feat=True, trans=True):
+
+    def __init__(self, code_nfts=2048, num_points=2500, n_dim=2, global_feat=True, trans=True):
         super(PointNetfeat, self).__init__()
         self.n_dim = n_dim
-        self.stn = STNkd(k = n_dim)
+        self.stn = STNkd(k=n_dim)
         self.code_nfts = code_nfts
         self.conv1 = torch.nn.Conv1d(n_dim, 64, 1)
         self.conv2 = torch.nn.Conv1d(64, 128, 1)
@@ -115,23 +94,24 @@ class PointNetfeat(nn.Module):
     def forward(self, x):
         if self.trans:
             trans = self.stn(x)
-            x = x.transpose(2,1)
+            x = x.transpose(2, 1)
             x = torch.bmm(x, trans)
-            x = x.transpose(2,1)
+            x = x.transpose(2, 1)
         x = F.relu(self.bn1(self.conv1(x)))
         pointfeat = x
         x = F.relu(self.bn2(self.conv2(x)))
         x = self.bn3(self.conv3(x))
-        x,_ = torch.max(x, 2)
+        x, _ = torch.max(x, 2)
         x = x.view(-1, self.code_nfts)
         if self.trans:
             if self.global_feat:
-                return x #, trans
+                return x  # , trans
             else:
                 x = x.view(-1, self.code_nfts, 1).repeat(1, 1, self.num_points)
                 return torch.cat([x, pointfeat], 1), trans
         else:
             return x
+
 
 ###
 # PointNet Generator
@@ -146,12 +126,13 @@ class PointNet_Generator(nn.Module):
     """ 
         Generator with PointNet Encoder, MLP Decoder
     """
+
     def __init__(self, code_nfts=2048, n_dim=2, global_feat=True, trans=True):
         super(PointNet_Generator, self).__init__()
         self.code_nfts = code_nfts
         self.n_dim = n_dim
         self.encoder = nn.Sequential(
-            PointNetfeat(code_nfts, 1, n_dim = n_dim, global_feat=global_feat, trans=trans),
+            PointNetfeat(code_nfts, 1, n_dim=n_dim, global_feat=global_feat, trans=trans),
             nn.Linear(code_nfts, code_nfts),
             nn.BatchNorm1d(code_nfts),
             nn.ReLU()
@@ -167,14 +148,14 @@ class PointNet_Generator(nn.Module):
             nn.Tanh()
         )
 
-
     def forward(self, x):
-        #Encoder
+        # Encoder
         code = self.encoder(x)
-        #Decoder
+        # Decoder
         x = self.decoder(code)
         x = x.view(-1, self.n_dim, 1)
         return x, code
+
 
 ###
 # PointNet Discriminator
@@ -189,12 +170,13 @@ class PointNet_Discriminator(nn.Module):
     """ 
         PointNet Discriminator
     """
-    def __init__(self, code_nfts=2048, n_dim = 2, global_feat=True, trans = False):
+
+    def __init__(self, code_nfts=2048, n_dim=2, global_feat=True, trans=False):
         super(PointNet_Discriminator, self).__init__()
         self.n_dim = n_dim
         self.code_nfts = code_nfts
         self.cls = nn.Sequential(
-            PointNetfeat(code_nfts, 1, n_dim = n_dim, global_feat=global_feat, trans=trans),
+            PointNetfeat(code_nfts, 1, n_dim=n_dim, global_feat=global_feat, trans=trans),
             nn.Linear(code_nfts, code_nfts),
             nn.BatchNorm1d(code_nfts),
             nn.ReLU(),
@@ -203,6 +185,6 @@ class PointNet_Discriminator(nn.Module):
         )
 
     def forward(self, x):
-        #Point level classifier
+        # Point level classifier
         x = self.cls(x)
         return x
